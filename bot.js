@@ -5,6 +5,7 @@ const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLat
 const qrcode = require('qrcode');
 const pino = require('pino');
 const app = express();
+
 let qrCodeData = null;
 let sock = null;
 let pairingCode = null;
@@ -15,19 +16,31 @@ let ownerLastActive = Date.now();
 
 app.get('/', (req,res) => res.send('✅ شغال - فوت على /qr'));
 app.get('/ping', (req,res) => res.send('pong'));
+
 app.get('/status', (req,res) => {
   const diff = (Date.now() - ownerLastActive) / 60000;
-  res.send(`<h1 style="font-family:Arial;text-align:center;margin-top:50px">منذ ${diff.toFixed(1)} دقيقة<br>${diff < 5? '😴 انت اونلاين - البوت ساكت' : '✅ اوفلاين 5+ - البوت جاهز'}</h1>`);
+  const isOnline = diff < 5;
+  res.send(`<h1 style="font-family:Arial;text-align:center;margin-top:50px">
+  منذ ${diff.toFixed(1)} دقيقة<br><br>
+  ${isOnline? '😴 انت بعدك اونلاين - البوت ساكت' : '✅ صرت اوفلاين 5+ دقايق - البوت جاهز يرد'}
+  <br><br><a href="/qr">روح على /qr</a></h1>`);
 });
+
 app.get('/qr', async (req,res) => {
-  if(!sock) return res.send('عم يبلش...');
-  if(!qrCodeData) return res.send('<h1>✅ CONNECTED - 5 MIN<br><a href="/status">status</a></h1>');
+  if(!sock) return res.send('عم يبلش... اعمل Refresh بعد 5 ثواني');
+  if(!qrCodeData) return res.send('<h1>✅ CONNECTED - 5 MIN MODE 🧠<br><br><a href="/status">شوف الـ status</a></h1>');
   const qrImage = await qrcode.toDataURL(qrCodeData);
-  res.send(`<center><img src="${qrImage}" style="width:350px"><br><form action="/pair"><input name="number" placeholder="96176xxxxxx"><button>جيب الكود</button></form>${pairingCode?`<h1>${pairingCode}</h1>`:''}</center>`);
+  res.send(`<center><img src="${qrImage}" style="width:350px"><br><form action="/pair"><input name="number" placeholder="96176xxxxxx" style="padding:12px;font-size:18px"><button style="padding:12px">جيب الكود</button></form>${pairingCode?`<h1 style="color:green;font-size:50px;letter-spacing:5px">${pairingCode}</h1>`:''}</center>`);
 });
+
 app.get('/pair', async (req,res) => {
-  try { let num = req.query.number.replace(/[^0-9]/g,''); pairingCode = await sock.requestPairingCode(num); res.redirect('/qr'); } catch(e){ res.send(e.message); }
+  try {
+    let num = req.query.number.replace(/[^0-9]/g,'');
+    pairingCode = await sock.requestPairingCode(num);
+    res.redirect('/qr');
+  } catch(e){ res.send(e.message); }
 });
+
 async function transcribeVoice(msg) {
   try {
     const buffer = await downloadMediaMessage(msg, 'buffer', {});
@@ -36,9 +49,11 @@ async function transcribeVoice(msg) {
     form.append('file', blob, 'voice.ogg');
     form.append('model', 'whisper-large-v3');
     const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', { method: 'POST', headers: { 'Authorization': `Bearer ${process.env.GROQ_KEY}` }, body: form });
-    const data = await r.json(); return data.text || null;
+    const data = await r.json();
+    return data.text || null;
   } catch(e){ return null; }
 }
+
 async function askAI(text) {
   try {
     const r = await fetch('https://api.groq.com/openai/v1/chat/completions',{
@@ -47,26 +62,23 @@ async function askAI(text) {
       body:JSON.stringify({
         model:'llama-3.3-70b-versatile',
         messages:[
-          { role:'system', content: `انت عبود، شب لبناني بترد عن صاحب الرقم.
+          { role:'system', content: `انت عبود، شب لبناني بترد عن صاحب الرقم على واتساب.
 
 قاعدة ذهبية: جاوب على المعنى مش تكرر الكلمة!
-- "كيفك" / "kifak" / "kifek" / "how are you" => رد "الحمدلله تمام وانت كيفك؟" او "hamdela tamem w enta kifak?" او "I'm good thanks, you?" حسب لغة الزبون
-- "شو الاخبار" / "shou akhbarak" => "والله كلو تمام الحمدلله"
-- ما ترد السؤال بنفس السؤال!
-
-رد بنفس لغة وستايل الزبون 100%:
-عربي لبناني = لبناني عامي
-Arabizi = Arabizi (kifak, mnih, hamdela)
-English = English
-قصير، مهضوم، طبيعي، مش بوت.` },
+- اذا قال "كيفك" / "kifak" / "how are you" => رد "الحمدلله تمام وانت؟" او "hamdela w enta kifak?" او "I'm good you?" حسب لغة الزبون - ممنوع ترد بنفس الكلمة!
+- رد بنفس لغة وستايل الزبون 100%: عربي=لبناني عامي، Arabizi=Arabizi، English=English
+- انت زكي جدا بتفهم كلشي: اسئلة، طبخ، دراسة، كود، رياضة
+- خليك قصير، مهضوم، طبيعي، مش بوت.` },
           {role:'user', content: text}
         ],
         temperature: 0.7
       })
     });
-    const d = await r.json(); return d.choices?.[0]?.message?.content || null;
+    const d = await r.json();
+    return d.choices?.[0]?.message?.content || null;
   } catch(e){ return null; }
 }
+
 async function startBot(){
   const { version } = await fetchLatestBaileysVersion();
   const { state, saveCreds } = await useMultiFileAuthState('auth');
@@ -75,7 +87,7 @@ async function startBot(){
   sock.ev.on('connection.update', async (u)=>{
     const { connection, lastDisconnect, qr } = u;
     if(qr){ qrCodeData = qr; }
-    if(connection === 'open'){ console.log('✅ CONNECTED'); qrCodeData=null; ownerLastActive = Date.now(); }
+    if(connection === 'open'){ console.log('✅ CONNECTED - FINAL 5 MIN'); qrCodeData=null; ownerLastActive = Date.now(); }
     if(connection === 'close'){ const code = lastDisconnect?.error?.output?.statusCode; if(code!== DisconnectReason.loggedOut) setTimeout(startBot, 3000); }
   });
   sock.ev.on('messages.upsert', async ({messages})=>{
@@ -107,6 +119,7 @@ async function startBot(){
     }
   });
 }
+
 startBot();
 app.listen(3000, ()=>console.log('running 3000'));
 setInterval(()=>{ const h=process.env.RENDER_EXTERNAL_HOSTNAME; if(h) fetch('https://'+h+'/ping').catch(()=>{}); }, 240000);
