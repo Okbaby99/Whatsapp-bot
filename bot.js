@@ -1,62 +1,34 @@
 const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
-const QRCode = require('qrcode');
-const pino = require('pino');
-const fs = require('fs');
-
 const app = express();
 const PORT = process.env.PORT || 10000;
-
 let latestQR = null;
-let sockStarted = false;
 
-async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-    const sock = makeWASocket({
-        auth: state,
-        logger: pino({ level: 'silent' }),
-        printQRInTerminal: false,
-        browser: ["Bot", "Chrome", "1.0"]
+async function startBot(){
+  try{
+    const {default: makeWASocket, useMultiFileAuthState} = require('@whiskeysockets/baileys');
+    const QRCode = require('qrcode');
+    const pino = require('pino');
+    const {state, saveCreds} = await useMultiFileAuthState('auth_info_baileys');
+    const sock = makeWASocket({auth: state, logger: pino({level:'silent'}), printQRInTerminal: false});
+    sock.ev.on('connection.update', async (u)=>{
+      if(u.qr){ latestQR = await QRCode.toDataURL(u.qr); }
+      if(u.connection==='open'){ latestQR=null; console.log('Connected'); }
+      if(u.connection==='close'){ latestQR=null; setTimeout(startBot,3000); }
     });
-
-    sock.ev.on('connection.update', async (update) => {
-        const { qr, connection } = update;
-        if (qr) {
-            console.log('QR Generated');
-            latestQR = await QRCode.toDataURL(qr);
-        }
-        if (connection === 'open') {
-            console.log('Connected');
-            latestQR = null;
-        }
-        if (connection === 'close') {
-            latestQR = null;
-            setTimeout(startBot, 5000);
-        }
-    });
-
     sock.ev.on('creds.update', saveCreds);
-    sockStarted = true;
+  }catch(e){ console.log('Bot error', e); }
 }
-
 startBot();
 
-app.get('/', (req, res) => {
-    res.send('<h1>Bot Live</h1><a href="/qr">فوت عال QR</a> | <a href="/clear">امسح الجلسة</a>');
+app.get('/', (req,res)=>{ res.send('Live - <a href="/qr">QR</a> - <a href="/clear">Clear</a>'); });
+
+app.get('/qr', (req,res)=>{
+  if(!latestQR){ return res.send('<body style="background:black;color:white;text-align:center;padding-top:50px"><h2>عم يولد الـ QR... انطر 10 ثواني</h2><script>setTimeout(()=>location.reload(),4000)</script></body>'); }
+  res.send(`<body style="background:black;color:white;text-align:center"><h2>امسح الـ QR</h2><img src="${latestQR}" style="width:300px;background:white;padding:10px"><script>setTimeout(()=>location.reload(),25000)</script></body>`);
 });
 
-app.get('/qr', (req, res) => {
-    if (!latestQR) {
-        return res.send(`
-        <html><body style="background:black;color:white;text-align:center;padding-top:50px;font-family:sans-serif">
-        <h2>عم يولد الـ QR... انطر 10 ثواني</h2>
-        <p>الصفحة بتعمل تحديث لحالها - خليك فاتحها</p>
-        <script>setTimeout(()=>location.reload(),5000)</script>
-        </body></html>`);
-    }
-    res.send(`
-    <html><body style="background:black;color:white;text-align:center;padding-top:20px">
-    <h2>امسح هيدا الـ QR</h2>
-    <img src="${latestQR}" style="width:320px;height:320px;background:white;padding:10px" />
-    <p>واتساب > الاجهزة المرتبطة > ربط جهاز</p>
-    <script>setTimeout(()=>location.reload(),25000)</script
+app.get('/clear', (req,res)=>{
+  try{ require('fs').rmSync('auth_info_baileys',{recursive:true,force:true}); require('fs').mkdirSync('auth_info_baileys'); latestQR=null; res.send('تم المسح - <a href="/qr">روح عال QR</a>'); }catch(e){ res.send('ما في جلسة - <a href="/qr">QR</a>'); }
+});
+
+app.listen(PORT, ()=>console.log('Server on '+PORT));
