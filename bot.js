@@ -1,70 +1,90 @@
 const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 10000;
-let latestQR = null;
+let sock = null;
+let pairingCode = null;
 
 async function startBot(){
   try{
-    console.log('Starting bot...');
     const {default: makeWASocket, useMultiFileAuthState} = require('@whiskeysockets/baileys');
-    const QRCode = require('qrcode');
     const pino = require('pino');
     const {state, saveCreds} = await useMultiFileAuthState('auth_info_baileys');
-    const sock = makeWASocket({
+    sock = makeWASocket({
       auth: state,
       logger: pino({level:'silent'}),
       printQRInTerminal: false,
       browser: ["Bot","Chrome","1.0"]
     });
     sock.ev.on('connection.update', async (u)=>{
-      if(u.qr){ 
-        console.log('QR ready'); 
-        latestQR = await QRCode.toDataURL(u.qr); 
-      }
       if(u.connection==='open'){ 
-        latestQR=null; 
-        console.log('Connected OK'); 
+        console.log('CONNECTED SUCCESS'); 
+        pairingCode = null;
       }
-      if(u.connection==='close'){ 
-        latestQR=null; 
-        console.log('Closed, restarting in 5s');
-        setTimeout(startBot,5000); 
+      if(u.connection==='close'){
+        console.log('Closed');
+        setTimeout(startBot,5000);
       }
     });
     sock.ev.on('creds.update', saveCreds);
+    console.log('Bot started, waiting for pair request');
   }catch(e){ 
-    console.log('Start error', e.message);
+    console.log('Error', e.message);
     setTimeout(startBot,5000);
   }
 }
 startBot();
 
-app.get('/', (req,res)=>{ res.send('Live - <a href="/qr">QR</a> | <a href="/clear">Clear</a>'); });
-
-app.get('/qr', (req,res)=>{
-  if(!latestQR){
-    return res.send(`<html><body style="background:black;color:white;text-align:center;padding-top:50px;font-family:sans-serif">
-    <h2>عم ولّد الـ QR... انطر 20 ثانية</h2>
-    <h3>الصفحة بتحدّث لحالها - ما تسكرها</h3>
-    <p>اذا ما طلع بعد دقيقة - فوت على /clear وارجع</p>
-    <script>setTimeout(()=>location.reload(),5000)</script>
-    </body></html>`);
+app.get('/', (req,res)=>{
+  res.send(`
+  <html><body style="background:#111;color:white;text-align:center;padding:30px;font-family:sans-serif">
+  <h1 style="color:#25D366">بوت الواتساب</h1>
+  <h3>حط رقمك مع رمز البلد بدون +</h3>
+  <p>مثال لبنان: 96176123456</p>
+  <p>مثال السعودية: 966512345678</p>
+  <input id="num" placeholder="961xxxxxxxx" style="padding:12px;width:250px;font-size:18px;border-radius:8px;border:none;text-align:center">
+  <br><br>
+  <button onclick="getCode()" style="padding:12px 30px;background:#25D366;color:white;border:none;border-radius:8px;font-size:18px">جيب الكود</button>
+  <h1 id="code" style="margin-top:30px;letter-spacing:5px"></h1>
+  <p id="info"></p>
+  <br><br>
+  <a href="/clear" style="color:gray">مسح الجلسة /clear</a>
+  <script>
+  async function getCode(){
+    let n = document.getElementById('num').value;
+    if(!n){ alert('حط الرقم'); return; }
+    document.getElementById('code').innerText = 'عم بجيب الكود... نطر 10 ثواني';
+    let r = await fetch('/pair?number='+n);
+    let t = await r.text();
+    document.getElementById('code').innerText = t;
+    document.getElementById('info').innerText = 'روح واتساب > الاجهزة المرتبطة > ربط ب رقم الهاتف وحط هيدا الكود';
   }
-  res.send(`<html><body style="background:black;color:white;text-align:center;padding-top:20px">
-  <h1 style="color:#25D366">امسح هيدا الـ QR بسرعة!</h1>
-  <img src="${latestQR}" style="width:320px;height:320px;background:white;padding:12px;border-radius:12px" />
-  <p>واتساب > الاجهزة المرتبطة > ربط جهاز</p>
-  <p>الـ QR بيتغير كل 25 ثانية</p>
-  <script>setTimeout(()=>location.reload(),25000)</script>
-  </body></html>`);
+  </script>
+  </body></html>
+  `);
+});
+
+app.get('/pair', async (req,res)=>{
+  try{
+    let number = req.query.number;
+    if(!number) return res.send('حط ?number=961xxxx');
+    number = number.replace(/[^0-9]/g,'');
+    if(!sock) return res.send('البوت بعدو عم يقلع - نطر 15 ثانية وجرب تاني');
+    
+    // طلب كود الاقتران
+    let code = await sock.requestPairingCode(number);
+    pairingCode = code;
+    console.log('Pairing code for '+number+': '+code);
+    res.send(code);
+  }catch(e){
+    console.log('Pair error', e);
+    res.send('غلط: ' + e.message + ' - تأكد الرقم صح وجرب تاني بعد 30 ثانية');
+  }
 });
 
 app.get('/clear', (req,res)=>{
-  res.send('تم مسح الجلسة! البوت عم يرجع يقلع... نطر 15 ثانية وفوت على /qr <br><br><a href="/qr">فوت عال QR بعد 15 ثانية</a>');
+  res.send('تم المسح! البوت عم يعمل ريستارت... نطر 20 ثانية وارجع على الصفحة الرئيسية <br><br><a href="/">رجاع عالرئيسية</a>');
   setTimeout(()=>{
     try{ require('fs').rmSync('auth_info_baileys',{recursive:true,force:true}); }catch(e){}
-    latestQR=null;
-    console.log('Cleared - exiting to restart');
     setTimeout(()=>process.exit(0),1000);
   },2000);
 });
