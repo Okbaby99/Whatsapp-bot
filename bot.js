@@ -8,17 +8,20 @@ let qrCodeData = null;
 let sock = null;
 let pairingCode = null;
 
-// الذاكرة
 const humanTakeover = new Map();
 const debounceTimers = new Map();
 const messageBuffer = new Map();
+
+// هون بنحفظ امتين انت اخر مرة كنت ناشط
+let ownerLastActive = Date.now();
+let ownerJid = null;
 
 app.get('/', (req,res) => res.send('✅ شغال - فوت على /qr'));
 app.get('/ping', (req,res) => res.send('pong'));
 
 app.get('/qr', async (req,res) => {
   if(!sock) return res.send('عم يبلش... اعمل Refresh بعد 5 ثواني');
-  if(!qrCodeData) return res.send('<h1>موصول already ✅ CONNECTED</h1>');
+  if(!qrCodeData) return res.send('<h1>موصول already ✅ CONNECTED<br><small>Smart Online Mode شغال 🧠</small></h1>');
   const qrImage = await qrcode.toDataURL(qrCodeData);
   res.send(`<center><img src="${qrImage}" style="width:350px"><br>
     <form action="/pair"><input name="number" placeholder="96176xxxxxx" style="padding:12px;font-size:18px">
@@ -34,32 +37,23 @@ app.get('/pair', async (req,res) => {
   } catch(e){ res.send(e.message); }
 });
 
-// 1- يحول الفويس لنص - بلا اي باكج اضافي
 async function transcribeVoice(msg) {
   try {
     const buffer = await downloadMediaMessage(msg, 'buffer', {});
-    console.log('🎤 نزل فويس', buffer.length);
-
     const form = new FormData();
     const blob = new Blob([buffer], { type: 'audio/ogg' });
     form.append('file', blob, 'voice.ogg');
     form.append('model', 'whisper-large-v3');
-
     const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${process.env.GROQ_KEY}` },
       body: form
     });
     const data = await r.json();
-    console.log('📝 الفويس:', data.text);
     return data.text || null;
-  } catch(e){
-    console.log('Voice err', e.message);
-    return null;
-  }
+  } catch(e){ console.log('Voice err', e.message); return null; }
 }
 
-// 2- العقل - بيفهم كل اللغات
 async function askAI(text) {
   try {
     const r = await fetch('https://api.groq.com/openai/v1/chat/completions',{
@@ -70,23 +64,20 @@ async function askAI(text) {
         messages:[
           {
             role:'system',
-            content: `انت شاب لبناني اسمك عبود، بترد على واتساب.
-            قواعد ذهبية:
-            1- رد بنفس لغة الزبون 100%. عربي لبناني عامي = رد لبناني عامي. انجليزي = انجليزي. فرنسي = فرنسي.
-            2- لغة الواتساب مقدسة: اذا قال "كيفك يا برو - مشتقلك - wlak - chou - kifak bro - habibi - ya zalame" رد بنفس الجو: "هلا يا برو والله مشتقلك اكتر" - خليك طبيعي كأنك رفيقو.
-            3- اذا لغة غريبة ترجمها بعقلك ورد بلغتو هو.
-            4- لا تقل ابدا انك ذكاء اصطناعي. انت انسان.
-            5- ردودك قصيرة، مهضومة، بلا رسمية.
-            6- اذا حدا سألك شو بتبيع قلو انا بساعد صاحب الرقم بالردود.`
+            content: `انت شاب لبناني اسمو عبود، دمك خفيف، بترد عالواتساب عن صاحب الرقم.
+            1- رد بنفس لغة الزبون 100%. لبناني = لبناني عامي. انجليزي = انجليزي. wlak kifak bro = رد بنفس جو الانترنت.
+            2- مهضوم، بتنكت، بتمزح، بس ذكي. اذا فتح معك اي موضوع جاوبو بطريقة ذكية كأنك انت صاحبو.
+            3- لا تقول انك بوت ابدا.
+            4- ردودك قصيرة ومش رسمية.`
           },
           {role:'user', content: text}
         ],
-        temperature: 0.85
+        temperature: 0.9
       })
     });
     const d = await r.json();
     return d.choices[0].message.content;
-  } catch(e){ console.log('AI err', e.message); return null; }
+  } catch(e){ return null; }
 }
 
 async function startBot(){
@@ -98,41 +89,63 @@ async function startBot(){
     syncFullHistory:false, markOnlineOnConnect:false,
     getMessage: async () => undefined
   });
+
   sock.ev.on('creds.update', saveCreds);
+  
   sock.ev.on('connection.update', async (u)=>{
     const { connection, lastDisconnect, qr } = u;
-    if(qr){ qrCodeData = qr; console.log('QR READY'); }
-    if(connection === 'open'){ console.log('✅ CONNECTED'); qrCodeData=null; }
+    if(qr){ qrCodeData = qr; }
+    if(connection === 'open'){ 
+      console.log('✅ CONNECTED - Smart Mode ON');
+      qrCodeData=null; 
+      ownerJid = sock.user.id;
+      console.log('Owner JID:', ownerJid);
+      ownerLastActive = Date.now();
+    }
     if(connection === 'close'){
       const code = lastDisconnect?.error?.output?.statusCode;
       if(code!== DisconnectReason.loggedOut) setTimeout(startBot, 3000);
     }
   });
 
+  // هون السر - كل ما انت تعمل اي شي، منعتبرك اونلاين
   sock.ev.on('messages.upsert', async ({messages})=>{
     for(const msg of messages){
       if(!msg.message) continue;
       const from = msg.key.remoteJid;
       if(from.endsWith('@g.us')) continue;
 
-      // اذا انت رديت بايدك -> سكّت البوت 10 دقايق
+      // اذا انت بعت رسالة -> انت اونلاين هلق!
       if(msg.key.fromMe){
+        ownerLastActive = Date.now();
         humanTakeover.set(from, Date.now());
-        console.log('👤 انت حكيت -> سكت 10د لـ', from);
+        console.log('👤 انت نشط - حدثنا الوقت:', new Date().toLocaleTimeString());
         continue;
       }
 
-      // اذا انت حاكي هيدا الشخص من اقل من 10 دقايق -> البوت ساكت
-      const last = humanTakeover.get(from);
-      if(last){
-        const mins = (Date.now()-last)/60000;
-        if(mins < 10){
-          console.log(`⏸️ ساكت ${mins.toFixed(1)}د`);
-          continue;
-        } else {
-          humanTakeover.delete(from);
-          console.log('✅ مرق 10د - البوت رجع');
+      // --- نظام الـ Smart Online ---
+      const timeSinceActive = (Date.now() - ownerLastActive) / 60000; // بالدقايق
+      console.log(`⏱️ انت صرلك ${timeSinceActive.toFixed(1)} دقايق اوفلاين`);
+
+      // اذا انت صرلك اقل من 10 دقايق اونلاين -> البوت ما بيرد
+      if(timeSinceActive < 10){
+        console.log(`😴 انت بعدك اونلاين (${timeSinceActive.toFixed(1)}د) -> البوت ساكت`);
+        // بس اذا هيدا الشخص انت رديت عليه بايدك، منسجلها كمان
+        const lastHuman = humanTakeover.get(from);
+        if(lastHuman && (Date.now()-lastHuman)/60000 < 10){
+          console.log('⏸️ كمان في takeover خاص لهيدا الشخص');
         }
+        continue;
+      }
+
+      // اذا انت اوفلاين اكتر من 10 دقايق -> البوت بيشتغل
+      // بس منشيك كمان الـ takeover الخاص
+      const last = humanTakeover.get(from);
+      if(last && (Date.now()-last)/60000 < 10){
+        console.log(`⏸️ ساكت 10د لهيدا الشخص تحديدا`);
+        continue;
+      } else if(last){
+        humanTakeover.delete(from);
       }
 
       // جيب النص
@@ -141,28 +154,36 @@ async function startBot(){
       if(!text && (msg.message.audioMessage || msg.message.pttMessage)){
         text = await transcribeVoice(msg);
         if(!text){
-          await sock.sendMessage(from, {text: 'ما سمعت الفويس منيح حبيب فيك تكتبلي؟ 🎤'});
+          // حتى لو انت اوفلاين، ما منرد عالفويس اذا ما فهمناه لن ما نكون اونلاين
+          if(timeSinceActive >= 10){
+            await sock.sendMessage(from, {text: 'ما سمعت الفويس منيح حبيب فيك تكتبلي؟ 🎤'});
+          }
           continue;
         }
       }
       if(!text) continue;
 
-      // نظام التجميع - ينطر 10 ثواني
       const old = messageBuffer.get(from) || '';
       messageBuffer.set(from, old ? old + '\n' + text : text);
       if(debounceTimers.has(from)) clearTimeout(debounceTimers.get(from));
 
-      console.log(`⏳ ناطر 10 ثواني من ${from}...`);
+      console.log(`⏳ ناطر 10 ثواني... (انت اوفلاين من ${timeSinceActive.toFixed(1)}د)`);
 
       const timer = setTimeout(async () => {
         const fullText = messageBuffer.get(from);
         messageBuffer.delete(from);
         debounceTimers.delete(from);
-        console.log(`📩 رح رد على ${from}: ${fullText}`);
         
+        // شيك اخير قبل ما ترد - يمكن انت فتت بهالـ 10 ثواني!
+        const finalCheck = (Date.now() - ownerLastActive) / 60000;
+        if(finalCheck < 10){
+          console.log(`🚫 لغينا الرد - انت رجعت اونلاين بآخر لحظة!`);
+          return;
+        }
+
+        console.log(`📩 رح رد على ${from}: ${fullText}`);
         await sock.sendPresenceUpdate('composing', from);
         await new Promise(r=>setTimeout(r, 2000 + Math.random()*2000));
-        
         const reply = await askAI(fullText);
         if(reply){
           await sock.sendPresenceUpdate('paused', from);
@@ -173,10 +194,18 @@ async function startBot(){
       debounceTimers.set(from, timer);
     }
   });
+
+  // كمان اذا قريت رسايل (blue ticks) منعتبرك اونلاين
+  sock.ev.on('messages.update', (updates)=>{
+    for(const u of updates){
+      if(u.update.status === 3 || u.update.status === 4){ // read / played
+        ownerLastActive = Date.now();
+        console.log('👀 قريت رسالة -> انت اونلاين');
+      }
+    }
+  });
 }
 
 startBot();
 app.listen(3000, ()=>console.log('running 3000'));
 setInterval(()=>{ const h=process.env.RENDER_EXTERNAL_HOSTNAME; if(h) fetch('https://'+h+'/ping').catch(()=>{}); }, 240000);
-process.on('uncaughtException', e=>console.log('uncaught', e.message));
-process.on('unhandledRejection', e=>console.log('unhandled', e?.message));
