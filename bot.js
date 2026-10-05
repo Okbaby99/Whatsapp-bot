@@ -18,39 +18,31 @@ app.get('/status', (req,res) => {
 });
 app.get('/qr', async (req,res) => {
   if(isConnected) return res.send('<h1 style="text-align:center;margin-top:100px">✅ CONNECTED</h1>');
-  if(!qrCodeData) return res.send('<h1>⏳ نطر 10 ثواني</h1>');
+  if(!qrCodeData) return res.send('<h1>⏳ نطر 10 ثواني واعمل ريفريش</h1>');
   let qrImage = await qrcode.toDataURL(qrCodeData);
   res.send(`<div style="text-align:center;margin-top:30px"><img src="${qrImage}" style="width:300px"></div>`);
 });
 
 const client = new Client({
   authStrategy: new LocalAuth(),
-  puppeteer: { args: ['--no-sandbox','--disable-setuid-sandbox'] }
+  puppeteer: {
+    headless: true,
+    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-accelerated-2d-canvas','--no-first-run','--no-zygote','--single-process','--disable-gpu']
+  }
 });
 
 client.on('qr', qr => { qrCodeData = qr; console.log('QR Ready'); });
 client.on('ready', () => { isConnected = true; console.log('READY!'); });
 client.on('disconnected', () => { isConnected = false; });
 
-// هيدا السطر الوحيد الصح - بس اذا انت بعتت
 client.on('message_create', (m) => {
-  if(m.fromMe) {
-    lastSeenOnline = Date.now();
-    console.log('FROM ME - انت اونلاين');
-  }
+  if(m.fromMe) lastSeenOnline = Date.now();
 });
 
 client.on('message', async msg => {
   if(msg.fromMe || msg.isGroup || msg.isStatus) return;
   let offlineMinutes = (Date.now() - lastSeenOnline) / 1000 / 60;
-  console.log(`رسالة: ${msg.body} | اوفلاين من: ${offlineMinutes.toFixed(1)} د`);
-
-  if(offlineMinutes < 5) {
-    console.log(`ساكت - بعدك اونلاين`);
-    return;
-  }
-
-  console.log(`عم يرد...`);
+  if(offlineMinutes < 5) return;
   try {
     const completion = await groq.chat.completions.create({
       model: "llama-3.1-8b-instant",
@@ -60,11 +52,8 @@ client.on('message', async msg => {
       ],
       max_tokens: 150
     });
-    let reply = completion.choices[0].message.content;
-    await client.sendMessage(msg.from, reply);
-    console.log('رد: ' + reply);
+    await client.sendMessage(msg.from, completion.choices[0].message.content);
   } catch(e) {
-    console.log('Error:', e.message);
     await client.sendMessage(msg.from, 'هلا حب! شوي وبرجعلك ههه');
   }
 });
