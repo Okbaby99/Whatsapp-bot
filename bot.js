@@ -1,3 +1,8 @@
+const { webcrypto } = require('crypto');
+if (!global.crypto) {
+  global.crypto = webcrypto;
+}
+
 const express = require('express');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
@@ -23,67 +28,51 @@ async function startBot() {
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
-
     if (qr) {
       qrCodeData = qr;
-      console.log('QR ready - روح على /qr');
+      console.log('QR READY');
     }
-
     if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode!== DisconnectReason.loggedOut;
-      if (shouldReconnect) {
-        startBot();
-      }
+      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      if (shouldReconnect) startBot();
     } else if (connection === 'open') {
-      console.log('✅ Bot Connected!');
+      console.log('BOT CONNECTED!');
       qrCodeData = null;
     }
   });
 
   sock.ev.on('messages.upsert', async (m) => {
-    // هون بتحط اوامر البوت تبعك
-    console.log('رسالة جديدة:', m.messages[0]?.message?.conversation);
+    console.log('رسالة جديدة');
   });
 }
 
 startBot();
 
-// رابط الـ QR
 app.get('/qr', async (req, res) => {
-  if (!qrCodeData) {
-    return res.send('<h2>البوت مربوط already او السيرفر بعده عم يحمل - جرب /pair</h2>');
-  }
+  if (!qrCodeData) return res.send('<h2>QR خلص وقتو - فوت على /pair?number=رقمك</h2>');
   try {
     const qrImage = await qrcode.toDataURL(qrCodeData);
-    res.send(`<img src="${qrImage}" style="width:300px"><br><h3>اعمل Scan بسرعة - معك 20 ثانية!</h3><script>setTimeout(()=>location.reload(), 20000)</script>`);
+    res.send(`<div style="text-align:center"><img src="${qrImage}" style="width:300px"><br><h3>اعمل Scan بسرعة!</h3></div><script>setTimeout(()=>location.reload(), 20000)</script>`);
   } catch (e) {
-    res.send('Error generating QR: ' + e.message);
+    res.send('Error: ' + e.message);
   }
 });
 
-// رابط كود الرقم - مصلح 100%
 app.get('/pair', async (req, res) => {
   try {
     let number = req.query.number;
-    if (!number) return res.status(400).send('حط رقم:?number=9613782814');
-
+    if (!number) return res.status(400).send('حط رقمك هيك: ?number=9613782814');
     number = number.replace(/[^0-9]/g, '');
-
-    if (!sock) return res.status(500).send('البوت بعده عم يحمل - جرب بعد دقيقة');
-
-    // هيدا السطر المهم يلي كان ناقص!
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
+    if (!sock) return res.send('البوت بعده عم يحمل - جرب بعد 10 ثواني');
+    
+    await new Promise(r => setTimeout(r, 3000));
     const code = await sock.requestPairingCode(number);
-    res.send(`<h1 style="font-size:50px; letter-spacing:5px">${code}</h1><p>حط هيدا الكود بواتساب > ربط جهاز > ربط برقم الهاتف</p>`);
+    res.send(`<div style="text-align:center; margin-top:100px"><h1 style="font-size:60px; letter-spacing:8px">${code}</h1><p>واتساب > الأجهزة المرتبطة > ربط جهاز > ربط برقم الهاتف</p></div>`);
   } catch (err) {
     console.error(err);
-    res.status(500).send(`Error: ${err.message} - جرب بعد دقيقة`);
+    res.status(500).send('Error: ' + err.message + ' - جرب بعد دقيقة');
   }
 });
 
-app.get('/', (req, res) => {
-  res.send('Bot is Live! روح على /qr او /pair?number=رقمك');
-});
-
-app.listen(PORT, () => console.log(`Server on ${PORT}`));
+app.get('/', (req, res) => res.send('Bot Live! /qr or /pair?number=رقمك'));
+app.listen(PORT, () => console.log('Server on ' + PORT));
