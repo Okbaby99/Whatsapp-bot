@@ -1,63 +1,89 @@
-const { Client, RemoteAuth } = require('whatsapp-web.js');
-const { MongoStore } = require('wwebjs-mongo');
-const mongoose = require('mongoose');
-const qrcode = require('qrcode');
 const express = require('express');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const qrcode = require('qrcode');
+const pino = require('pino');
 
 const app = express();
-let qr = ''; 
-let ready = false; 
-let client;
+const PORT = process.env.PORT || 10000;
 
-app.get('/', (req,res)=>res.send('Bot Live! <a href="/qr">/qr</a> | <a href="/pair">/pair</a> | DB: ' + (mongoose.connection.readyState === 1 ? 'Connected ✅' : 'Connecting...')));
-app.get('/qr', async (req,res)=>{
-  if(ready) return res.send('<h1>CONNECTED ✅</h1>');
-  if(!qr) return res.send('عم يجهز... نطر 30 ثانية واعمل ريفريش');
-  const img = await qrcode.toDataURL(qr);
-  res.send(`<center><img src="${img}" width="350"><h3>صور بسرعة!</h3></center>`);
-});
+let qrCodeData = null;
+let sock = null;
 
-app.get('/pair', async (req,res)=>{
-  const number = req.query.number;
-  if(!number) return res.send('حط رقمك بالرابط هيك: /pair?number=9617XXXXXXX');
-  try {
-    const code = await client.requestPairingCode(number.replace('+','').replace(/ /g,''));
-    res.send(`<h1>الكود تبعك: ${code}</h1><p>واتساب > Linked devices > Link with phone number > حط الكود</p><h2>${code.match(/.{1,4}/g).join('-')}</h2>`);
-  } catch(e){ res.send('Error: '+e.message+' - جرب بعد دقيقة'); }
-});
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
 
-app.listen(process.env.PORT||10000, ()=>console.log('Express live'));
-
-async function start(){
-  // 1- اتصل بـ MongoDB
-  console.log('Connecting to MongoDB...');
-  await mongoose.connect(process.env.MONGODB_URI);
-  console.log('✅ MongoDB Connected!');
-
-  const chromium = require('@sparticuz/chromium');
-  const puppeteer = require('puppeteer-core');
-  
-  // 2- استخدم MongoStore بدل LocalAuth
-  const store = new MongoStore({ mongoose: mongoose });
-
-  client = new Client({
-    authStrategy: new RemoteAuth({ 
-      store: store,
-      backupSyncIntervalMs: 300000 
-    }),
-    puppeteer: { 
-      args: [...chromium.args,'--no-sandbox','--disable-setuid-sandbox'], 
-      executablePath: await chromium.executablePath(), 
-      headless: true 
-    },
-    webVersionCache: { type: 'remote', remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1015901307.html' }
+  sock = makeWASocket({
+    auth: state,
+    logger: pino({ level: 'silent' }),
+    printQRInTerminal: false,
+    browser: ["Chrome", "Linux", ""],
   });
 
-  client.on('qr', q=>{ qr=q; console.log('QR ready - روح على /qr'); });
-  client.on('ready', ()=>{ ready=true; console.log('READY ✅ Bot is ready!'); });
-  client.on('remote_session_saved', ()=>{ console.log('Session saved to MongoDB!'); });
-  client.on('message', m=>{ if(m.body.toLowerCase()=='ping') m.reply('pong شغال! 🔥'); });
-  
-  await client.initialize();
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      qrCodeData = qr;
+      console.log('QR ready - روح على /qr');
+    }
+
+    if (connection === 'close') {
+      const shouldReconnect = lastDisconnect?.error?.output?.statusCode!== DisconnectReason.loggedOut;
+      if (shouldReconnect) {
+        startBot();
+      }
+    } else if (connection === 'open') {
+      console.log('✅ Bot Connected!');
+      qrCodeData = null;
+    }
+  });
+
+  sock.ev.on('messages.upsert', async (m) => {
+    // هون بتحط اوامر البوت تبعك
+    console.log('رسالة جديدة:', m.messages[0]?.message?.conversation);
+  });
 }
-start().catch(e=>console.error('START ERROR:', e));
+
+startBot();
+
+// رابط الـ QR
+app.get('/qr', async (req, res) => {
+  if (!qrCodeData) {
+    return res.send('<h2>البوت مربوط already او السيرفر بعده عم يحمل - جرب /pair</h2>');
+  }
+  try {
+    const qrImage = await qrcode.toDataURL(qrCodeData);
+    res.send(`<img src="${qrImage}" style="width:300px"><br><h3>اعمل Scan بسرعة - معك 20 ثانية!</h3><script>setTimeout(()=>location.reload(), 20000)</script>`);
+  } catch (e) {
+    res.send('Error generating QR: ' + e.message);
+  }
+});
+
+// رابط كود الرقم - مصلح 100%
+app.get('/pair', async (req, res) => {
+  try {
+    let number = req.query.number;
+    if (!number) return res.status(400).send('حط رقم:?number=9613782814');
+
+    number = number.replace(/[^0-9]/g, '');
+
+    if (!sock) return res.status(500).send('البوت بعده عم يحمل - جرب بعد دقيقة');
+
+    // هيدا السطر المهم يلي كان ناقص!
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    const code = await sock.requestPairingCode(number);
+    res.send(`<h1 style="font-size:50px; letter-spacing:5px">${code}</h1><p>حط هيدا الكود بواتساب > ربط جهاز > ربط برقم الهاتف</p>`);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send(`Error: ${err.message} - جرب بعد دقيقة`);
+  }
+});
+
+app.get('/', (req, res) => {
+  res.send('Bot is Live! روح على /qr او /pair?number=رقمك');
+});
+
+app.listen(PORT, () => console.log(`Server on ${PORT}`));
