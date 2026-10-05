@@ -2,6 +2,8 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const express = require('express');
 const Groq = require('groq-sdk');
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium-min');
 
 const app = express();
 const groq = new Groq({ apiKey: process.env.GROQ_KEY });
@@ -23,47 +25,56 @@ app.get('/qr', async (req,res) => {
   res.send(`<div style="text-align:center;margin-top:30px"><img src="${qrImage}" style="width:300px"></div>`);
 });
 
-const client = new Client({
-  authStrategy: new LocalAuth(),
-  puppeteer: {
-    headless: true,
-    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-accelerated-2d-canvas','--no-first-run','--no-zygote','--single-process','--disable-gpu']
-  }
-});
+async function startClient() {
+  const executablePath = await chromium.executablePath();
+  const client = new Client({
+    authStrategy: new LocalAuth(),
+    puppeteer: {
+      executablePath,
+      args: chromium.args,
+      headless: chromium.headless,
+    }
+  });
 
-client.on('qr', qr => { qrCodeData = qr; console.log('QR Ready'); });
-client.on('ready', () => { isConnected = true; console.log('READY!'); });
-client.on('disconnected', () => { isConnected = false; });
-client.on('message_create', (m) => { if(m.fromMe) lastSeenOnline = Date.now(); });
+  client.on('qr', qr => { qrCodeData = qr; });
+  client.on('ready', () => { isConnected = true; console.log('READY!'); });
+  client.on('disconnected', () => { isConnected = false; });
+  client.on('message_create', (m) => { if(m.fromMe) lastSeenOnline = Date.now(); });
 
-client.on('message', async msg => {
-  if(msg.fromMe || msg.isGroup || msg.isStatus) return;
-  let offlineMinutes = (Date.now() - lastSeenOnline) / 1000 / 60;
-  if(offlineMinutes < 2) return; // هون صار دقيقتين
+  client.on('message', async msg => {
+    if(msg.fromMe || msg.isGroup || msg.isStatus) return;
+    let offlineMinutes = (Date.now() - lastSeenOnline) / 1000 / 60;
+    if(offlineMinutes < 2) return;
 
-  try {
-    const chat = await msg.getChat();
-    await chat.sendStateTyping();
-    await new Promise(r => setTimeout(r, 1200));
+    try {
+      const chat = await msg.getChat();
+      await chat.sendStateTyping();
+      await new Promise(r => setTimeout(r, 1200));
 
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.1-8b-instant",
-      messages: [
-        { role: "system", content: `انت شب لبناني 22 سنة بتحكي واتساب قصير: ههه، لك، خيي، ايه والله. رد بسطر واحد قصير.` },
-        { role: "user", content: msg.body }
-      ],
-      max_tokens: 60,
-      temperature: 0.8
-    });
+      const completion = await groq.chat.completions.create({
+        model: "llama-3.1-8b-instant",
+        messages: [
+          { role: "system", content: `انت شب لبناني 22 سنة بتحكي واتساب قصير جدا: ههه، لك، خيي. رد بسطر واحد قصير.` },
+          { role: "user", content: msg.body }
+        ],
+        max_tokens: 60,
+        temperature: 0.8
+      });
 
-    await chat.clearState();
-    await client.sendMessage(msg.from, completion.choices[0].message.content);
-  } catch(e) {
-    const chat = await msg.getChat();
-    await chat.clearState();
-    await client.sendMessage(msg.from, 'هلا حب! شوي وبرجعلك');
-  }
-});
+      await chat.clearState();
+      await client.sendMessage(msg.from, completion.choices[0].message.content);
+    } catch(e) {
+      console.log(e);
+      try {
+        const chat = await msg.getChat();
+        await chat.clearState();
+        await client.sendMessage(msg.from, 'هلا حب! شوي وبرجعلك');
+      } catch {}
+    }
+  });
 
-client.initialize();
+  await client.initialize();
+}
+
+startClient();
 app.listen(process.env.PORT || 10000, ()=>console.log('running'));
