@@ -13,19 +13,18 @@ let qrCodeData = '';
 let isConnected = false;
 
 app.get('/', (req,res) => res.send('✅ شغال'));
-app.get('/status', (req,res) => {
-  let diff = Math.floor((Date.now() - lastSeenOnline)/1000/60 * 10)/10;
-  let msg = diff < 2? `😴 انت بعدك اونلاين - البوت ساكت` : `✅ صرت اوفلاين ${diff} دقيقة - البوت جاهز يرد`;
-  res.send(`<div style="text-align:center;font-family:sans-serif;margin-top:50px;font-size:22px">منذ ${diff} دقيقة<br><br>${msg}</div>`);
-});
 app.get('/qr', async (req,res) => {
-  if(isConnected) return res.send('<h1 style="text-align:center;margin-top:100px">✅ CONNECTED - 2 MIN MODE 🧠</h1><br><center><a href="/status">شوف الـ status</a></center>');
+  if(isConnected) return res.send('<h1 style="text-align:center">✅ CONNECTED</h1>');
   if(!qrCodeData) return res.send('<h1>⏳ نطر 10 ثواني واعمل ريفريش</h1>');
-  let qrImage = await qrcode.toDataURL(qrCodeData);
-  res.send(`<div style="text-align:center;margin-top:30px"><img src="${qrImage}" style="width:300px"></div>`);
+  let img = await qrcode.toDataURL(qrCodeData);
+  res.send(`<center><img src="${img}" style="width:300px"><p>اعمل Scan من واتساب</p></center>`);
+});
+app.get('/status', (req,res) => {
+  let m = Math.floor((Date.now()-lastSeenOnline)/1000/60*10)/10;
+  res.send(`<h1 style="text-align:center;margin-top:50px">${m<2?'😴 انت اونلاين':'✅ اوفلاين '+m+' د'}</h1>`);
 });
 
-async function startClient() {
+async function startBot(){
   const executablePath = await chromium.executablePath();
   const client = new Client({
     authStrategy: new LocalAuth(),
@@ -33,48 +32,36 @@ async function startClient() {
       executablePath,
       args: chromium.args,
       headless: chromium.headless,
+      defaultViewport: chromium.defaultViewport
     }
   });
 
-  client.on('qr', qr => { qrCodeData = qr; });
-  client.on('ready', () => { isConnected = true; console.log('READY!'); });
-  client.on('disconnected', () => { isConnected = false; });
-  client.on('message_create', (m) => { if(m.fromMe) lastSeenOnline = Date.now(); });
+  client.on('qr', q => { qrCodeData = q; console.log('QR READY'); });
+  client.on('ready', () => { isConnected = true; console.log('READY'); });
+  client.on('message_create', m => { if(m.fromMe) lastSeenOnline = Date.now(); });
 
   client.on('message', async msg => {
-    if(msg.fromMe || msg.isGroup || msg.isStatus) return;
-    let offlineMinutes = (Date.now() - lastSeenOnline) / 1000 / 60;
-    if(offlineMinutes < 2) return;
-
-    try {
+    if(msg.fromMe || msg.fromGroup || msg.from === 'status@broadcast') return;
+    if((Date.now()-lastSeenOnline)/1000/60 < 2) return;
+    try{
       const chat = await msg.getChat();
       await chat.sendStateTyping();
-      await new Promise(r => setTimeout(r, 1200));
-
-      const completion = await groq.chat.completions.create({
+      await new Promise(r=>setTimeout(r,1000));
+      const comp = await groq.chat.completions.create({
         model: "llama-3.1-8b-instant",
         messages: [
-          { role: "system", content: `انت شب لبناني 22 سنة بتحكي واتساب قصير جدا: ههه، لك، خيي. رد بسطر واحد قصير.` },
-          { role: "user", content: msg.body }
+          {role:"system", content:"انت شب لبناني، بتحكي قصير ومهضوم: ههه، لك، خيي، والله. جواب سطر واحد بس."},
+          {role:"user", content: msg.body}
         ],
-        max_tokens: 60,
-        temperature: 0.8
+        max_tokens: 60
       });
-
       await chat.clearState();
-      await client.sendMessage(msg.from, completion.choices[0].message.content);
-    } catch(e) {
-      console.log(e);
-      try {
-        const chat = await msg.getChat();
-        await chat.clearState();
-        await client.sendMessage(msg.from, 'هلا حب! شوي وبرجعلك');
-      } catch {}
-    }
+      await client.sendMessage(msg.from, comp.choices[0].message.content);
+    }catch(e){ console.log(e.message); }
   });
 
   await client.initialize();
 }
 
-startClient();
-app.listen(process.env.PORT || 10000, ()=>console.log('running'));
+startBot();
+app.listen(process.env.PORT || 10000, ()=>console.log('Server up'));
