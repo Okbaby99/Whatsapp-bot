@@ -1,69 +1,62 @@
 const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const QRCode = require('qrcode');
 const pino = require('pino');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 let latestQR = null;
+let sockStarted = false;
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-    
     const sock = makeWASocket({
         auth: state,
         logger: pino({ level: 'silent' }),
         printQRInTerminal: false,
+        browser: ["Bot", "Chrome", "1.0"]
     });
 
     sock.ev.on('connection.update', async (update) => {
         const { qr, connection } = update;
         if (qr) {
-            console.log('QR Generated!');
+            console.log('QR Generated');
             latestQR = await QRCode.toDataURL(qr);
         }
         if (connection === 'open') {
-            console.log('Bot Connected!');
+            console.log('Connected');
             latestQR = null;
+        }
+        if (connection === 'close') {
+            latestQR = null;
+            setTimeout(startBot, 5000);
         }
     });
 
     sock.ev.on('creds.update', saveCreds);
+    sockStarted = true;
 }
 
 startBot();
 
-// الصفحة الرئيسية
 app.get('/', (req, res) => {
-    res.send('Bot Live! <br><br> <a href="/qr">فوت على QR من هون - /qr</a> <br> <a href="/pair?number=96103782814">او فوت على الكود - /pair</a>');
+    res.send('<h1>Bot Live</h1><a href="/qr">فوت عال QR</a> | <a href="/clear">امسح الجلسة</a>');
 });
 
-// صفحة الـ QR الجديدة - هي يلي كانت ناقصة عندك
 app.get('/qr', (req, res) => {
     if (!latestQR) {
         return res.send(`
-            <html><body style="background:black;color:white;text-align:center;padding-top:50px;font-family:sans-serif">
-            <h2>عم يولد الـ QR ... انطر 10 ثواني واعمل Refresh</h2>
-            <p>خليك فاتح الصفحة - رح يطلع لحالو</p>
-            <script>setTimeout(()=>location.reload(),5000)</script>
-            </body></html>
-        `);
+        <html><body style="background:black;color:white;text-align:center;padding-top:50px;font-family:sans-serif">
+        <h2>عم يولد الـ QR... انطر 10 ثواني</h2>
+        <p>الصفحة بتعمل تحديث لحالها - خليك فاتحها</p>
+        <script>setTimeout(()=>location.reload(),5000)</script>
+        </body></html>`);
     }
     res.send(`
-        <html><body style="background:black;color:white;text-align:center;padding-top:20px;font-family:sans-serif">
-        <h2>امسح الـ QR بواتساب</h2>
-        <img src="${latestQR}" style="width:300px;height:300px;background:white;padding:10px" />
-        <p>واتساب > الاعدادات > الاجهزة المرتبطة > ربط جهاز</p>
-        <p style="color:yellow">بينتهي بعد 30 ثانية - اعمل Refresh اذا خلص</p>
-        <script>setTimeout(()=>location.reload(),25000)</script>
-        </body></html>
-    `);
-});
-
-app.get('/pair', async (req,res)=>{
-    // هون كود الـ pair القديم تبعك
-    res.send('روح على /qr - اذا بدك كود حط ?number=96103782814');
-});
-
-app.listen(PORT, () => console.log('Server on ' + PORT));
+    <html><body style="background:black;color:white;text-align:center;padding-top:20px">
+    <h2>امسح هيدا الـ QR</h2>
+    <img src="${latestQR}" style="width:320px;height:320px;background:white;padding:10px" />
+    <p>واتساب > الاجهزة المرتبطة > ربط جهاز</p>
+    <script>setTimeout(()=>location.reload(),25000)</script
