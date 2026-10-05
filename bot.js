@@ -1,67 +1,49 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const express = require('express');
-const Groq = require('groq-sdk');
-const puppeteer = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium-min');
 
 const app = express();
-const groq = new Groq({ apiKey: process.env.GROQ_KEY });
+let qrCode = '';
+let isReady = false;
 
-let lastSeenOnline = Date.now();
-let qrCodeData = '';
-let isConnected = false;
-
-app.get('/', (req,res) => res.send('✅ شغال'));
+app.get('/', (req,res) => res.send('Bot is Live - go to /qr'));
 app.get('/qr', async (req,res) => {
-  if(isConnected) return res.send('<h1 style="text-align:center">✅ CONNECTED</h1>');
-  if(!qrCodeData) return res.send('<h1>⏳ نطر 10 ثواني واعمل ريفريش</h1>');
-  let img = await qrcode.toDataURL(qrCodeData);
-  res.send(`<center><img src="${img}" style="width:300px"><p>اعمل Scan من واتساب</p></center>`);
+  if(isReady) return res.send('<h1 style="text-align:center">✅ CONNECTED - خلص!</h1>');
+  if(!qrCode) return res.send('<h1>⏳ نطر 10 ثواني واعمل Refresh</h1>');
+  try{
+    const img = await qrcode.toDataURL(qrCode);
+    res.send(`<div style="text-align:center"><h2>اعمل Scan</h2><img src="${img}" style="width:300px"><p>من واتساب > Linked Devices</p></div>`);
+  }catch(e){ res.send('Error: '+e.message); }
 });
-app.get('/status', (req,res) => {
-  let m = Math.floor((Date.now()-lastSeenOnline)/1000/60*10)/10;
-  res.send(`<h1 style="text-align:center;margin-top:50px">${m<2?'😴 انت اونلاين':'✅ اوفلاين '+m+' د'}</h1>`);
-});
+
+app.listen(process.env.PORT || 10000, () => console.log('Web server live'));
 
 async function startBot(){
-  const executablePath = await chromium.executablePath();
-  const client = new Client({
-    authStrategy: new LocalAuth(),
-    puppeteer: {
-      executablePath,
-      args: chromium.args,
-      headless: chromium.headless,
-      defaultViewport: chromium.defaultViewport
-    }
-  });
+  try{
+    const chromium = require('@sparticuz/chromium');
+    const puppeteer = require('puppeteer-core');
+    const execPath = await chromium.executablePath();
+    
+    const client = new Client({
+      authStrategy: new LocalAuth(),
+      puppeteer: {
+        args: chromium.args,
+        executablePath: execPath,
+        headless: chromium.headless
+      }
+    });
 
-  client.on('qr', q => { qrCodeData = q; console.log('QR READY'); });
-  client.on('ready', () => { isConnected = true; console.log('READY'); });
-  client.on('message_create', m => { if(m.fromMe) lastSeenOnline = Date.now(); });
+    client.on('qr', q => { qrCode = q; console.log('QR READY'); });
+    client.on('ready', () => { isReady = true; console.log('CLIENT READY'); });
+    client.on('message', async msg => {
+      if(msg.body.toLowerCase() === 'ping') msg.reply('pong ✅ البوت شغال!');
+    });
 
-  client.on('message', async msg => {
-    if(msg.fromMe || msg.fromGroup || msg.from === 'status@broadcast') return;
-    if((Date.now()-lastSeenOnline)/1000/60 < 2) return;
-    try{
-      const chat = await msg.getChat();
-      await chat.sendStateTyping();
-      await new Promise(r=>setTimeout(r,1000));
-      const comp = await groq.chat.completions.create({
-        model: "llama-3.1-8b-instant",
-        messages: [
-          {role:"system", content:"انت شب لبناني، بتحكي قصير ومهضوم: ههه، لك، خيي، والله. جواب سطر واحد بس."},
-          {role:"user", content: msg.body}
-        ],
-        max_tokens: 60
-      });
-      await chat.clearState();
-      await client.sendMessage(msg.from, comp.choices[0].message.content);
-    }catch(e){ console.log(e.message); }
-  });
-
-  await client.initialize();
+    await client.initialize();
+    console.log('Bot initialized');
+  }catch(e){
+    console.error('Bot error:', e.message);
+  }
 }
 
 startBot();
-app.listen(process.env.PORT || 10000, ()=>console.log('Server up'));
